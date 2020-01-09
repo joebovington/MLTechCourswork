@@ -1,32 +1,46 @@
 import pandas as pd
 import numpy as np
 from sklearn import svm
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GridSearchCV
 import re
 import nltk
 import unidecode
-from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import precision_score, recall_score, precision_recall_fscore_support
 from sklearn.metrics import f1_score
+from sklearn.naive_bayes import GaussianNB
+from sklearn.tree import DecisionTreeClassifier
 
 nltk.download('stopwords')
 from nltk.corpus import stopwords
 from langdetect import detect_langs
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
 
 trainingData = pd.read_csv("Data/trainingData.csv")
+testingData = pd.read_csv("Data/testingData.csv")
 trainingData = trainingData.sample(frac=1)
 trainingData.reset_index(drop=True, inplace=True)
 
-x = trainingData['tweetText']
-labels = trainingData['label']
+training_x = trainingData['tweetText']
+training_labels = trainingData['label']
 
-y = []
-for k in range(0, len(labels)):
-    if labels[k] == 'real':
-        y.append(1)
-    else:
-        y.append(0)
+testing_x = testingData['tweetText']
+testing_labels = testingData['label']
+
+
+def label(labels):
+    y = []
+    for k in range(0, len(labels)):
+        if labels[k] == 'real':
+            y.append(1)
+        else:
+            y.append(0)
+    return y
+
+
+training_y = label(training_labels)
+testing_y = label(testing_labels)
 
 
 def preprocess(dat, langs, hashtags):
@@ -45,7 +59,7 @@ def preprocess(dat, langs, hashtags):
             lang = detect_langs(tweet)
             langs.append(lang[0].lang)
         except:
-            print("no lang detected")
+            # print("no lang detected")
             lang = "null"
             langs.append(lang)
         # gets hashtags
@@ -71,33 +85,29 @@ def preprocess(dat, langs, hashtags):
     return processed_dat
 
 
-# def merge(list1, list2, list3):
-#    merged_list = [(list1[i], list2[i], list3[i]) for i in range(0, len(list1))]
-#    return merged_list
+training_hashtags = []
+training_language = []
+training_tweets = preprocess(training_x, training_language, training_hashtags)
+df_training = pd.DataFrame(
+    {'tweets': training_tweets, 'hashtags': training_hashtags, 'language': training_language, 'labels': training_y})
 
-# narray = np.array([tweets, hashtags, langs])
-# tup = merge(tweets, hashtags, langs)
+testing_hashtags = []
+testing_language = []
+testing_tweets = preprocess(testing_x, testing_language, testing_hashtags)
+df_testing = pd.DataFrame(
+    {'tweets': testing_tweets, 'hashtags': testing_hashtags, 'language': testing_language, 'labels': testing_y})
 
-# nTweets = np.array(tweets)
-# nHashtags = np.array(hashtags)
-# nLanguages = np.array(langs)
-hashtags = []
-language = []
-tweets = preprocess(x, language, hashtags)
-df = pd.DataFrame({'tweets': tweets, 'hashtags': hashtags, 'language': language, 'labels': y})
-
-# vectorizer = CountVectorizer(stop_words=stopwords.words('english'))
-# max_features=1500, min_df=5, max_df=0.7,
-# vectorizer.fit(data)
-# data = vectorizer.transform(data)
-# vectorizer.fit(df)
-# df = vectorizer.transform(df)
 v = TfidfVectorizer(max_features=1500, stop_words=stopwords.words('english'))
-df['tweets'] = list(v.fit_transform(df['tweets']).toarray())
+df_training['tweets'] = list(v.fit_transform(df_training['tweets']).toarray())
+df_testing['tweets'] = list(v.transform(df_testing['tweets']).toarray())
+
 v2 = TfidfVectorizer()
-df['hashtags'] = list(v2.fit_transform(df['hashtags']).toarray())
+df_training['hashtags'] = list(v2.fit_transform(df_training['hashtags']).toarray())
+df_testing['hashtags'] = list(v2.transform(df_testing['hashtags']).toarray())
+
 v3 = CountVectorizer()
-df['language'] = list(v3.fit_transform(df['language']).toarray())
+df_training['language'] = list(v3.fit_transform(df_training['language']).toarray())
+df_testing['language'] = list(v3.transform(df_testing['language']).toarray())
 
 
 def concat_features(tweets, language, hashtags):
@@ -108,36 +118,55 @@ def concat_features(tweets, language, hashtags):
         hash = hashtags[i]
         v = np.concatenate([tweet, lan, hash])
         vector.append(v)
-        # print(vector)
     return vector
 
 
-df['vector'] = concat_features(df['tweets'], df['language'], df['hashtags'])
+df_training['vector'] = concat_features(df_training['tweets'], df_training['language'], df_training['hashtags'])
+df_testing['vector'] = concat_features(df_testing['tweets'], df_testing['language'], df_testing['hashtags'])
+# data_train, data_test, label_train, label_test = train_test_split(df['vector'], df['labels'], test_size=0.2)
+data_train = np.asarray(df_training['vector'].tolist())
+label_test = df_testing['labels']
 
-data_train, data_test, label_train, label_test = train_test_split(df['vector'], df['labels'], test_size=0.2)
 
-data_train = np.asarray(data_train.tolist())
-# print(x)
+def svc_param_selection(X, y, nfolds):
+    Cs = [0.01, 0.1, 1, 10]
+    gammas = [0.001, 0.01, 0.1, 1]
+    param_grid = {'C': Cs, 'gamma': gammas}
+    print('param select')
+    grid_search = GridSearchCV(svm.SVC(kernel='rbf'), param_grid, cv=nfolds)
+    grid_search.fit(X, y)
+    print(grid_search.best_params_)
+    return grid_search.best_params_
 
-# for j in range(0, len(x)):
-#    print(x[j])
 
+# params = svc_param_selection(data_train, label_train, 5)
+# svm = svm.SVC(C=params['C'], gamma=params['gamma'])
+# svm = svm.SVC(C=11, gamma=0.075)
 svm = svm.SVC()
-svm.fit(data_train, label_train)
+svm.fit(data_train, df_training['labels'])
+predicted = svm.predict(np.asarray(df_testing['vector'].tolist()))
 
-predicted = svm.predict(np.asarray(data_test.tolist()))
-# print(predicted)
+# dt = DecisionTreeClassifier(max_depth=50)
+# dt.fit(data_train, df['labels'])
+# predicted = dt.predict(np.asarray(df_testing['vector'].tolist()))
 
-precision, recall, fscore, support = precision_recall_fscore_support(label_test, predicted)
+# clf = RandomForestClassifier(max_depth=5)
+# clf.fit(data_train, df['labels'])
+# predicted = clf.predict(np.asarray(df_testing['vector'].tolist()))
+
+# gb = GaussianNB()
+# gb.fit(data_train, label_train)
+# predicted = gb.predict(np.asarray(data_test.tolist()))
+
+precision, recall, fscore, support = precision_recall_fscore_support(label_test, predicted, zero_division=1,
+                                                                     average='binary')
+# precision_score = precision_score(label_test, predicted)
+# recall_score = recall_score(label_test, predicted)
 f1 = f1_score(label_test, predicted)
 
 print('precision: {}'.format(precision))
 print('recall: {}'.format(recall))
-print('fscore: {}'.format(fscore))
-print('support: {}'.format(support))
 print('f1score: {}'.format(f1))
 
 # dt = DecisionTreeClassifier(max_depth=2)
 # dt.fit(df, labels)
-
-
